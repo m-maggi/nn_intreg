@@ -25,7 +25,8 @@
 		"extensions": [
 			"charliermarsh.ruff",
 			"ms-python.python",
-			"eamodio.gitlens"
+			"eamodio.gitlens",
+			"ms-toolsai.jupyter"
 		]
 		}
 	}

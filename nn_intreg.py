@@ -17,13 +17,9 @@ tfd = tfp.distributions
 
 # custom Loss as in https://stackoverflow.com/questions/64223840/use-additional-trainable-variables-in-keras-tensorflow-custom-loss-function
 class MyLoss(Layer):
-    def __init__(
-        self,
-        shape_par,
-    ):
-        super(MyLoss, self).__init__()
+    def __init__(self, shape_par, ):
+        super().__init__()
         self.a_hat = K.variable(shape_par)
-        # self.a_hat = tf.cast(shape_par, tf.float32)
 
     def get_vars(self):
         return self.a_hat
@@ -42,6 +38,45 @@ class MyLoss(Layer):
     def call(self, y_true, y_pred):
         self.add_loss(self.custom_loss(y_true, y_pred))
         return y_pred
+
+# demo solution, probably nicer to implement a class that inherits tf.keras.Model
+class IntReg:
+    def __init__(self, optimizer, epochs=1000, patience=50, val_split=0.2):
+        self.optimizer = optimizer
+        self.epochs = epochs
+        self.patience = patience
+        self.val_split = val_split
+
+    def fit(self, X, y, shape_x0=1.5):
+        inputs = Input(shape=(X.shape[1],))
+        # as we work with intervals, the `y` must contain two columns
+        y_input = Input(shape=(2,))
+        initial_guess = y.mean(axis=1).mean()
+        output = Dense(
+            1,
+            activation="exponential",
+            kernel_initializer=initializers.Zeros(),
+            bias_initializer=initializers.constant(np.log(initial_guess)),
+        )(inputs)
+        my_loss = MyLoss(np.log(shape_x0))(y_input, output)  
+        model = Model(inputs=[inputs, y_input], outputs=my_loss)
+        model.compile(optimizer=self.optimizer, run_eagerly=False)
+        history = model.fit(
+            [X, y],
+            None,
+            batch_size=X.shape[0],
+            epochs=self.epochs,
+            validation_split=self.val_split,
+            verbose=0,
+            callbacks=[EarlyStopping(monitor="val_loss", patience=self.patience)],
+        )
+        self.model = model
+        self.layers = model.layers
+        return history
+
+    def predict(self, X):
+        return self.model.predict([X, np.zeros((len(X), 2))])
+
 
 
 if __name__ == "__main__":
@@ -111,41 +146,10 @@ if __name__ == "__main__":
     ).to_numpy()
     y_train = X_y_train.select(["left_break", "right_break"]).to_numpy()
     y_train = np.clip(y_train, 0.000001, 99999999)
-    inputs = Input(shape=(X_y_train.shape[1] - 3,))
-    y_input = Input(shape=(2,))
-    # hidden1 = Dense(10)(inputs)
-    constraint = tf.keras.constraints.MinMaxNorm(
-        min_value=0.0, max_value=1.0, rate=1.0, axis=0
-    )
-    output = Dense(
-        1,
-        activation="exponential",
-        kernel_initializer=initializers.Zeros(),
-        bias_initializer=initializers.constant(np.log(20.0)),
-        # kernel_constraint=constraint
-    )(inputs)
-    my_loss = MyLoss(
-        np.log(1.6),
-    )(
-        y_input,
-        output,
-    )  # here can also initialize those var1, var2
-    model = Model(inputs=[inputs, y_input], outputs=my_loss)
-
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.4)
-    model.compile(optimizer=optimizer, run_eagerly=False)
-    print(model.summary())
-    history = model.fit(
-        [X_train, y_train],
-        None,
-        batch_size=NSIM,
-        epochs=1000,
-        validation_split=0.2,
-        verbose=0,
-        callbacks=[EarlyStopping(monitor="val_loss", patience=50)],
-    )
-
-    scales_hat = model.predict([X_train, y_train])
+    model = IntReg(optimizer)
+    history = model.fit(X_train, y_train)
+    scales_hat = model.predict(X_train)
     results = (
         sample.with_columns(yhat=pl.lit(scales_hat.flatten()))
         .group_by(["X1", "X2"])
