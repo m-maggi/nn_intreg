@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import gamma
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import polars as pl
@@ -32,19 +33,23 @@ if __name__ == "__main__":
     np.random.seed(500)
     # number of simulations for the synthetic data
     NSIM = 100
+    SHAPE_PAR = 1.5
+    N_BINS = 10
     # define the covariates
+    intercept_labels = ["intercept"]
     x1_labels = ["foo", "bar"]
     x2_labels = ["apple", "orange", "lemon"]
     # define the relativities
+    intercept_factors = [20.]
     x1_factors = [1.0, 1.07]
     x2_factors = [1.0, 0.95, 1.02]
     # function to collect covariates information
-    _helper_pl = lambda cov_name, labels, factors: pl.DataFrame(
-        {cov_name: labels, f"factor_{cov_name}": factors}
-    )
+    def _helper_pl(cov_name, labels, factors):
+        return pl.DataFrame({cov_name: labels, f"factor_{cov_name}": factors})
     sample = []
     # sampling of the labels and the factors
     for el in [
+        ("intercept", intercept_labels, intercept_factors),
         ("X1", x1_labels, x1_factors),
         ("X2", x2_labels, x2_factors),
     ]:
@@ -61,6 +66,16 @@ if __name__ == "__main__":
     ).select(
         ["X1", "X2", "factor_total"]
     )
+
+    y = gamma.rvs(size=NSIM, a=SHAPE_PAR, scale=sample["factor_total"] / SHAPE_PAR)
+    sample = sample.with_columns(
+        y=pl.lit(y)
+    ).with_columns(
+        breaks=pl.col("y").qcut(N_BINS, include_breaks=True)
+    ).unnest("breaks")
+    
+    intervals = sample['y_bin'].cast(str).str.strip_chars('( ] "').str.split(", ").list.to_struct().struct.unnest().cast(pl.Float32)
+   
     X_train = np.zeros((10, 5))
     inputs = Input(shape=(X_train.shape[1],))
     y_input = Input(shape=(1,))
