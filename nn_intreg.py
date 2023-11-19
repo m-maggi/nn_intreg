@@ -12,16 +12,21 @@ from tensorflow.keras import Model
 
 # custom Loss as in https://stackoverflow.com/questions/64223840/use-additional-trainable-variables-in-keras-tensorflow-custom-loss-function
 class MyLoss(Layer):
-    def __init__(self, var1, var2):
+    def __init__(self, shape_par, ):
         super(MyLoss, self).__init__()
-        self.var1 = K.variable(var1)  # or tf.Variable(var1) etc.
-        self.var2 = K.variable(var2)
+        self.a_hat = K.variable(shape_par)  # or tf.Variable(var1) etc.
+        # self.var2 = K.variable(var2)
 
     def get_vars(self):
-        return self.var1, self.var2
+        return self.a_hat
 
     def custom_loss(self, y_true, y_pred):
-        return self.var1 * K.mean(K.square(y_true - y_pred)) + self.var2**2
+        # y_pred is the mean
+        scales_hat = y_pred / self.a_hat
+        gamma_rv = gamma(a=self.a_hat, scale=scales_hat)
+        probability = gamma_rv.cdf(y_true[:, 1]) - gamma_rv.cdf(y_true[:, 0])
+        return K.mean(-probability)
+      #  return self. * K.mean(K.square(y_true - y_pred)) + self.var2**2
 
     def call(self, y_true, y_pred):
         self.add_loss(self.custom_loss(y_true, y_pred))
@@ -74,16 +79,37 @@ if __name__ == "__main__":
         breaks=pl.col("y").qcut(N_BINS, include_breaks=True)
     ).unnest("breaks")
     
-    intervals = sample['y_bin'].cast(str).str.strip_chars('( ] "').str.split(", ").list.to_struct().struct.unnest().cast(pl.Float32)
+    intervals = sample['y_bin'].cast(str).str.strip_chars(
+        '( ] "'
+    ).str.split(
+        ", "
+    ).list.to_struct().struct.rename_fields(["left_break", "right_break"]).struct.unnest().cast(pl.Float32)
    
-    X_train = np.zeros((10, 5))
-    inputs = Input(shape=(X_train.shape[1],))
-    y_input = Input(shape=(1,))
-    hidden1 = Dense(10)(inputs)
-    output = Dense(1)(hidden1)
-    my_loss = MyLoss(0.5, 0.5)(
+    sample = pl.concat([sample, intervals], how="horizontal").select(
+        ["X1", "X2", "left_break", "right_break"]
+    )
+    X_y_train = sample.to_dummies(["X1", "X2"])
+    X_train = X_y_train.select(
+        pl.all().exclude(["left_break", "right_break"])
+    ).to_numpy()
+    y_train = X_y_train.select(
+        ["left_break", "right_break"]
+    ).to_numpy()
+    inputs = Input(shape=(X_y_train.shape[1] - 2,))
+    y_input = Input(shape=(2,))
+    # hidden1 = Dense(10)(inputs)
+    output = Dense(1)(inputs)
+    my_loss = MyLoss(2.5, )(
         y_input, output
     )  # here can also initialize those var1, var2
     model = Model(inputs=[inputs, y_input], outputs=my_loss)
 
     model.compile(optimizer="adam")
+
+    history = model.fit([X_train, y_train], None,
+                    batch_size=32, epochs=10, 
+                    # validation_split=0.1, verbose=0,
+                    # callbacks=[EarlyStopping(monitor='val_loss', patience=5)]
+                    )
+    
+    print("")
